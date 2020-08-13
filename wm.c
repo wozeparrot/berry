@@ -31,7 +31,6 @@ static struct client *c_list[WORKSPACE_NUMBER]; /* 'stack' of managed clients in
 static struct client *f_list[WORKSPACE_NUMBER]; /* ordered lists for clients to be focused */
 static struct monitor *m_list = NULL; /* All saved monitors */
 static struct config conf; /* gloabl config */
-static int ws_m_list[WORKSPACE_NUMBER]; /* Mapping from workspaces to associated monitors */
 static int curr_ws = 0;
 static int m_count = 0;
 static Cursor move_cursor, normal_cursor;
@@ -123,7 +122,6 @@ static void ipc_cardinal_focus(long *d);
 static void ipc_cycle_focus(long *d);
 static void ipc_pointer_focus(long *d);
 static void ipc_config(long *d);
-static void ipc_save_monitor(long *d);
 static void ipc_set_font(long *d);
 static void ipc_edge_gap(long *d);
 
@@ -180,7 +178,6 @@ static void (*ipc_handler[IPCLast])(long *) = {
     [IPCCardinalFocus]            = ipc_cardinal_focus,
     [IPCCycleFocus]               = ipc_cycle_focus,
     [IPCPointerFocus]             = ipc_pointer_focus,
-    [IPCSaveMonitor]              = ipc_save_monitor,
     [IPCSetFont]                  = ipc_set_font,
     [IPCEdgeGap]                  = ipc_edge_gap,
     [IPCConfig]                   = ipc_config
@@ -1090,25 +1087,6 @@ ipc_edge_gap(long *d)
 }
 
 static void
-ipc_save_monitor(long *d)
-{
-    int ws, mon;
-    ws = d[1];
-    mon = d[2];
-
-    if (mon >= m_count) {
-        LOGN("Cannot save monitor, number is too high");
-        return;
-    }
-
-    LOGP("Saving ws %d to monitor %d", ws, mon);
-
-    /* Associate the given workspace to the given monitor */
-    ws_m_list[ws] = mon;
-    ewmh_set_viewport();
-}
-
-static void
 ipc_set_font(long *d)
 {
     UNUSED(d);
@@ -1388,24 +1366,12 @@ client_move_relative(struct client *c, int x, int y)
     /* God this is soooo ugly */
     if (conf.edge_lock) {
         int dx, dy, m_x, m_y;
-        int m_width = 0;
-        int m_height = 0;
         m_x = m_list[0].x;
         m_y = m_list[0].y;
-        
-        /* Get size of all screens */
-        for (int i = 0; i < m_count; i++) {
-            struct monitor mon = m_list[i];
-
-            if (mon.x >= m_width)
-                m_width += mon.width;
-            if (mon.y >= m_height)
-                m_height += mon.height;
-        }
 
         /* Lock on the right side of the screen */
-        if (c->geom.x + c->geom.width + x > m_width + m_x - conf.right_gap)
-            dx = m_width + m_x - c->geom.width - conf.right_gap;
+        if (c->geom.x + c->geom.width + x > display_width + m_x - conf.right_gap)
+            dx = display_width + m_x - c->geom.width - conf.right_gap;
         /* Lock on the left side of the screen */
         else if (c->geom.x + x < m_x + conf.left_gap)
             dx = m_x + conf.left_gap; 
@@ -1413,8 +1379,8 @@ client_move_relative(struct client *c, int x, int y)
             dx = c->geom.x + x;
 
         /* Lock on the bottom of the screen */
-        if (c->geom.y + c->geom.height + y > m_height + m_y - conf.bot_gap)
-            dy = m_height + m_y - conf.bot_gap - c->geom.height;
+        if (c->geom.y + c->geom.height + y > display_height + m_y - conf.bot_gap)
+            dy = display_height + m_y - conf.bot_gap - c->geom.height;
         /* Lock on the top of the screen */
         else if (c->geom.y + y < m_y + conf.top_gap)
             dy = m_y + conf.top_gap;
@@ -1739,27 +1705,15 @@ client_resize_relative(struct client *c, int w, int h)
 {
     if (conf.edge_lock) {
         int dw, dh, m_x, m_y;
-        int m_width = 0;
-        int m_height = 0;
         m_x = m_list[0].x;
         m_y = m_list[0].y;
-        
-        /* Get size of all screens */
-        for (int i = 0; i < m_count; i++) {
-            struct monitor mon = m_list[i];
-
-            if (mon.x >= m_width)
-                m_width += mon.width;
-            if (mon.y >= m_height)
-                m_height += mon.height;
-        }
 
         /* First, check if the resize will exceed the dimensions set by
          * the right side of the given monitor. If they do, cap the resize
          * amount to move only to the edge of the monitor.
          */
-        if (c->geom.x + c->geom.width + w > m_x + m_width - conf.right_gap)
-            dw = m_x + m_width - c->geom.x - conf.right_gap;
+        if (c->geom.x + c->geom.width + w > m_x + display_width - conf.right_gap)
+            dw = m_x + display_width - c->geom.x - conf.right_gap;
         else
             dw = c->geom.width + w;
 
@@ -1767,8 +1721,8 @@ client_resize_relative(struct client *c, int w, int h)
          * the bottom side of the given monitor. If they do, cap the resize
          * amount to move only to the edge of the monitor.
          */
-        if (c->geom.y + c->geom.height + conf.t_height + h > m_y + m_height - conf.bot_gap)
-            dh = m_height + m_y - c->geom.y - conf.bot_gap;
+        if (c->geom.y + c->geom.height + conf.t_height + h > m_y + display_height - conf.bot_gap)
+            dh = display_height + m_y - c->geom.y - conf.bot_gap;
         else
             dh = c->geom.height + h;
 
@@ -1813,13 +1767,11 @@ client_save(struct client *c, int ws)
 static bool
 safe_to_focus(int ws)
 {
-    int mon = ws_m_list[ws];
-
     if (m_count == 1)
         return false;
     
     for (int i = 0; i < WORKSPACE_NUMBER; i++)
-        if (i != ws && ws_m_list[i] == mon && c_list[i] != NULL && c_list[i]->hidden == false)
+        if (i != ws && c_list[i] != NULL && c_list[i]->hidden == false)
             return false;
 
     return true;
@@ -1891,7 +1843,6 @@ static void
 setup(void)
 {
     unsigned long data[1], data2[1];
-    int mon;
     XSetWindowAttributes wa = { .override_redirect = true };
     // Setup our conf initially
     conf.b_width         = BORDER_WIDTH;
@@ -1993,10 +1944,9 @@ setup(void)
     LOGN("Setting up monitors");
     monitors_setup();
     LOGN("Successfully setup monitors");
-    mon = ws_m_list[curr_ws];
     XWarpPointer(display, None, root, 0, 0, 0, 0,
-        m_list[mon].x + m_list[mon].width / 2,
-        m_list[mon].y + m_list[mon].height / 2);
+        m_list[0].x + m_list[0].width / 2,
+        m_list[0].y + m_list[0].height / 2);
     
     gc = XCreateGC(display, root, 0, 0); 
 
@@ -2043,7 +1993,6 @@ static void
 switch_ws(int ws)
 {
     for (int i = 0; i < WORKSPACE_NUMBER; i++) {
-        /*if (i != ws && ws_m_list[i] == ws_m_list[ws]) {*/
         if (i != ws) {
             for (struct client *tmp = c_list[i]; tmp != NULL; tmp = tmp->next) {
                 client_hide(tmp);
@@ -2074,8 +2023,7 @@ switch_ws(int ws)
         }
     }
     curr_ws = ws;
-    int mon = ws_m_list[ws];
-    LOGP("Setting Screen #%d with active workspace %d", m_list[mon].screen, ws);
+    LOGP("Setting active workspace %d", ws);
     client_manage_focus(c_list[curr_ws]);
     ewmh_set_active_desktop(ws);
 }

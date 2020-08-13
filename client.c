@@ -70,7 +70,6 @@ static struct command c[] = {
     { "quit",                   IPCQuit,                    true,  0, NULL       },
     { "top_gap",                IPCTopGap,                  true,  1, fn_int     },
     { "edge_gap",               IPCEdgeGap,                 false, 4, fn_int     },
-    { "save_monitor",           IPCSaveMonitor,             false, 2, fn_int     },
     { "smart_place",            IPCSmartPlace,              true,  1, fn_bool    },
     { "draw_text",              IPCDrawText,                true,  1, fn_bool    },
     { "edge_lock",              IPCEdgeLock,                true,  1, fn_bool    },
